@@ -8,13 +8,31 @@
 #include "elf.h"
 #include "fcntl.h"
 
-void swapToDisk(void);
-void insertPageToMem(uint va, char *mem);
 
+
+int swapIn(void);
+
+ /* if (proc->pageFile == -1)
+		proc->pageFile = open(createPageFileName(proc->pid), O_CREATE | O_RDWR);*/
 
 extern char data[];  // defined by kernel.ld
 pde_t *kpgdir;  // for use in scheduler()
 struct segdesc gdt[NSEGS];
+
+//stores a full page from the address va,  into a file with file discriptor - fd.
+int
+storeToFile(int fd, void *va, int size, uint page){
+	lseekPage(fd, page);
+	return write(fd, (char *)va, size);
+}
+
+//loads a full page(when using size = PGSIZE) from fd to va.
+int
+loadFromFile(int fd, void *va, int size, uint page){
+	lseekPage(fd, page);
+	return read(fd, (char *)va, size);
+}
+
 
 // Set up CPU's kernel segment descriptors.
 // Run once on entry on each CPU.
@@ -227,39 +245,61 @@ allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
 {
   char *mem;
   uint a;
-  
-  int removedIndex;
-
+  pte_t *pte;
+  int removeFromMemCell;
   if(newsz >= KERNBASE)
     return 0;
   if(newsz < oldsz)
     return oldsz;
-
-  a = PGROUNDUP(oldsz);
+    
+  a = PGROUNDUP(oldsz);   // a is a VA
   for(; a < newsz; a += PGSIZE){
-    mem = kalloc();
-    if(mem == 0){
-      cprintf("allocuvm out of memory\n");
-      deallocuvm(pgdir, newsz, oldsz);
-      return 0;
-    }
-    
-    if (proc->pagesInMemCount < 15){
-		insertPageToMem(a, mem);
-	} else{
-		removedIndex = getPageToRemove();
-		swapToDisk();
-		
-		//new page in main mem in place of the removed one
-		proc->pagesInMemory[removedIndex].address = a;
-		proc->pagesInMemory[removedIndex].kaddress = mem;
-		proc->pagesInMemory[removedIndex].isUsed = PAGE_USED;
-		insertToMetaData(removedIndex);
-		
+	mem = kalloc();
+	if(mem == 0){
+	  cprintf("allocuvm out of memory\n");
+	  deallocuvm(pgdir, newsz, oldsz);
+	  return 0;
 	}
-    
-    memset(mem, 0, PGSIZE);
-    mappages(pgdir, (char*)a, PGSIZE, v2p(mem), PTE_W|PTE_U);
+	
+	if (proc->pagesInMemCount < 15){
+		cprintf("%d , %d... %d\n", a ,mem, proc->pagesInMemCount);
+		proc->pagesInMemory[proc->pagesInMemCount].address = a;
+		proc->pagesInMemory[proc->pagesInMemCount].kaddress = mem;
+		insertToMetaData(proc->pagesInMemCount);
+		proc->pagesInMemCount++;
+	
+	} else {
+		//should swap a page into the memory, free that page, 
+		removeFromMemCell = swapIn( );
+		cprintf("remove frome cell is %d\n", removeFromMemCell);	
+		if (removeFromMemCell < 0){
+			cprintf("cannot swap, expect errors!!\n");
+			return 0;
+		}
+		//find pte of page to be removed from mem
+		pte = walkpgdir(proc->pgdir, (void *)proc->pagesInMemory[removeFromMemCell].address, 0);
+		//if (!pte) {
+			//cprintf("cannot swap, Page file is FULL!!!, expect errors!\n");
+			//return 0;
+		//}
+		
+		//dealloc old page from mem...
+		kfree(proc->pagesInMemory[removeFromMemCell].kaddress);
+		
+		//page
+		*pte &= ~PTE_P;
+		*pte |= PTE_PG;
+		
+		//inserting new page to mem arr
+		proc->pagesInMemory[removeFromMemCell].address = a;
+		proc->pagesInMemory[removeFromMemCell].kaddress = mem;
+		proc->pagesInMemory[removeFromMemCell].isUsed = PAGE_USED;
+		insertToMetaData(removeFromMemCell);
+		
+		proc->pagesInFileCount++;
+	}
+	memset(mem, 0, PGSIZE);
+	mappages(pgdir, (char*)a, PGSIZE, v2p(mem), PTE_W|PTE_U);    
   }
   return newsz;
 }
@@ -398,102 +438,87 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
   return 0;
 }
 
-void insertPageToMem(uint va, char *mem){
-	int pageNum = proc->pagesInMemCount;
-	//enter information to array
-	proc->pagesInMemory[pageNum].address = va;
-	proc->pagesInMemory[pageNum].kaddress = mem;
-	proc->pagesInMemory[pageNum].isUsed = PAGE_USED;
-	//insert info to meta data
-	insertToMetaData(pageNum);
-	//increase num of pages in memory
-	proc->pagesInMemCount++;
-	
-}
-
-void swapToDisk(){
-	int removedIndex = removeFromMetaData();
+//selects a page needed to be written to the page file
+//writes it to the page file
+//informs that the page is paged and is not present anymore.
+//does not treats meta data! see allocuvm
+int swapIn(){
+	int removeFromMemCell = removeFromMetaData();
 	int i;
-	pte_t *pte;
-	//find the first place that is not used in page file:
-	for (i = 0; i < MAX_PAGES_IN_FILE(); i++){
-		if (proc->pagesInPageFile[i].isUsed == PAGE_UNUSED)
-			break;
-	}
-	if (i == MAX_PAGES_IN_FILE()){
-		cprintf("problem - no unused pages in page file!\n");
-		return;
-	}
-	//write to file 
-	lseekPage(proc->pageFile, i);
-	write(proc->pageFile, proc->pagesInMemory[removedIndex].kaddress, PGSIZE);
-	//inform that page is paged to disk and no longer exists in main mem:
-	pte = walkpgdir(proc->pgdir, (void *)proc->pagesInMemory[removedIndex].address, 0);
-	if (!pte){
-		cprintf("pte not found! %d\n", proc->pagesInMemory[removedIndex].address);
-		return;
-	}
-	*pte &= ~PTE_P;
-	*pte |= PTE_PG;
-	proc->pagesInMemory[removedIndex].isUsed = PAGE_UNUSED;
-	
-	//deallocate page from the memory:
-	kfree(proc->pagesInMemory[removedIndex].kaddress);
-	
-	//move addresses to the disks pageInfo
-	proc->pagesInPageFile[i].isUsed = PAGE_USED;
-	proc->pagesInPageFile[i].address = proc->pagesInMemory[removedIndex].address;
-	proc->pagesInPageFile[i].kaddress = proc->pagesInPageFile[removedIndex].kaddress;
-	proc->pagesInFileCount++;
-}
-
-void swapFromDisk(uint a, int removedIndex){
-	//find the page in the data struct that holds a, it is in the pagesInPageFile
-	int i;
-	uint va;
-	char *mem;
-	pte_t *pte;
-	
-	
-	va = PGROUNDDOWN(a);
 	
 	for(i = 0; i < MAX_PAGES_IN_FILE(); i++){
-		if (proc->pagesInPageFile[i].isUsed == PAGE_USED && proc->pagesInPageFile[i].address == va) //i should be loaded to mem!
+		if (proc->pagesInPageFile[i].isUsed == PAGE_UNUSED){
 			break;
-	}
-	if ( i == MAX_PAGES_IN_FILE()){ //tkinut
-		cprintf("no page responding to %d, %d", a, va);
-		return;
+		}
 	}
 	
-	//do alloc
-	mem = kalloc();
-	if (mem == 0){
-		cprintf("cannot bring page from the file");
-		return;
+	
+	if (i == MAX_PAGES_IN_FILE() ){ //shpuld never be true!!!
+		cprintf("cannot swap, Page file is FULL!!!, expect errors!\n");
+		return -1;
 	}
-	//read
+
+	//moving page info from mem arr to file arr
+	proc->pagesInPageFile[i].isUsed = PAGE_USED;
+	proc->pagesInPageFile[i].address = proc->pagesInMemory[removeFromMemCell].address;
+	proc->pagesInPageFile[i].kaddress = proc->pagesInMemory[removeFromMemCell].kaddress;
+	
+	proc->pagesInMemory[removeFromMemCell].isUsed = PAGE_UNUSED;
 	lseekPage(proc->pageFile, i);
-	read(proc->pageFile, mem, PGSIZE);
-	//struct operations
-	proc->pagesInMemory[removedIndex].address = va;
-	proc->pagesInMemory[removedIndex].kaddress = mem;
-	proc->pagesInMemory[removedIndex].isUsed = PAGE_USED;
-	insertToMetaData(removedIndex);
-	//handle pte
-	pte = walkpgdir(proc->pgdir, (void *) va, 0);
-	*pte = v2p(mem)  | PTE_W | PTE_U | PTE_P;
-	*pte &= ~PTE_PG;
+	write(proc->pageFile, proc->pagesInMemory[removeFromMemCell].kaddress, PGSIZE);
 	
-	proc->pagesInPageFile[i].isUsed = PAGE_UNUSED;
+	return removeFromMemCell;
 	
-	return;
 }
 
-void swapPages(uint a){
-	int removedIndex = getPageToRemove();
-	swapToDisk();
+//pfAddress = page fault address(should be rounded!)
+int swapPages(uint pfAddress){
+	int removeFromMemCell = swapIn();
+	pte_t *pte;
+	char * mem;
+	//int i;
+	uint a;
 	
-	swapFromDisk(a, removedIndex);
+	if (removeFromMemCell < 0){
+		cprintf("cannot swap, expect errors!!\n");
+		return 0;
+	}
+	//find pte of page to be removed from mem
+	pte = walkpgdir(proc->pgdir, (void *)proc->pagesInMemory[removeFromMemCell].address, 0);
+	if (!pte) {
+		cprintf("cannot swap, Page file is FULL!!!, expect errors!\n");
+		return 0;
+	}
+	
+	//dealloc old page from mem...
+	kfree(proc->pagesInMemory[removeFromMemCell].kaddress);
+	
+	//page
+	*pte &= ~PTE_P;
+	*pte |= PTE_PG;
+	
+	mem = kalloc(); 
+	if (mem == 0){
+		cprintf("cannot bring page from the file");
+		return 0;
+	}
+	
+	//lseek
+	read(proc->pageFile, mem, PGSIZE);
+	a = PGROUNDDOWN(pfAddress); //can be pofKaddress
+	//cprintf("a is %d", a);
+	pte = walkpgdir(proc->pgdir, (void *) a, 0); //bring the pte of a from memory, we want to edit it for the new mem...
+	*pte = v2p(mem) | PTE_W | PTE_U | PTE_P;
+	*pte &= ~PTE_PG;
+	
+	//inserting new page to mem arr
+	proc->pagesInMemory[removeFromMemCell].address = a;
+	proc->pagesInMemory[removeFromMemCell].kaddress = mem;
+	proc->pagesInMemory[removeFromMemCell].isUsed = PAGE_USED;
+	insertToMetaData(removeFromMemCell);
+	
+//	proc->pagesInFileCount++;
+	
+	return 1;
 	
 }

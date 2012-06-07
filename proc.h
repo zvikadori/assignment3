@@ -130,4 +130,5 @@ void insertToMetaData(int);
 int removeFromMetaData(void);
 int getPageToRemove(void);
 void initMetaData(struct proc *);
-int swapPages(uint);
+
+void swapPages(uint a);
