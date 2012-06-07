@@ -81,7 +81,19 @@ exec(char *path, char **argv)
     if(*s == '/')
       last = s+1;
   safestrcpy(proc->name, last, sizeof(proc->name));
+	
+	
+	
+  //page file info zerosizing:
+  proc->pagesInMemCount = 0;
+  proc->pagesInFileCount = 0;
+  for (i = 0; i< MAX_PSYC_PAGES; i++)
+	proc->pagesInMemory	[i].isUsed = PAGE_UNUSED;
 
+  for (i = 0; i< MAX_PAGES_IN_FILE(); i++)
+	proc->pagesInPageFile[i].isUsed = PAGE_UNUSED;
+  initMetaData(proc);
+	
   // Commit to the user image.
   oldpgdir = proc->pgdir;
   proc->pgdir = pgdir;

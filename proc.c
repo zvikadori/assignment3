@@ -745,3 +745,11 @@ int removeFromMetaData(){
 	return ans;
 	
 }
+
+void initMetaData(struct proc *p){
+	int i = 0;
+	p->metaDataFIFO.counter = 0;
+	for (; i< MAX_PAGES_IN_FILE(); i++)
+		p->metaDataFIFO.pages[i] = 0;
+	
+}
