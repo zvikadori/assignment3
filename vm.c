@@ -255,7 +255,7 @@ allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
 		proc->pagesInMemory[removedIndex].kaddress = mem;
 		proc->pagesInMemory[removedIndex].isUsed = PAGE_USED;
 		insertToMetaData(removedIndex);
-		
+		proc->pagesInFileCount++;
 	}
     
     memset(mem, 0, PGSIZE);
@@ -444,7 +444,7 @@ void swapToDisk(){
 	proc->pagesInPageFile[i].isUsed = PAGE_USED;
 	proc->pagesInPageFile[i].address = proc->pagesInMemory[removedIndex].address;
 	proc->pagesInPageFile[i].kaddress = proc->pagesInPageFile[removedIndex].kaddress;
-	proc->pagesInFileCount++;
+	
 }
 
 void swapFromDisk(uint a, int removedIndex){
