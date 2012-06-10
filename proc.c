@@ -245,7 +245,12 @@ exit(void)
 
   if(proc == initproc)
     panic("init exiting");
-
+  
+  #ifdef TRUE
+  procdump();
+  #endif
+  
+  
   // Close all open files.
   for(fd = 0; fd < NOFILE; fd++){
     if(proc->ofile[fd]){
@@ -552,7 +557,7 @@ procdump(void)
     cprintf("\n");
   }
   cprintf("%d% free pages in the system\n", 100 * ((MAX_PSYC_PAGES * NPROC) - numOfPagesInMem)/(MAX_PSYC_PAGES * NPROC));
-
+  
 } 
 
 
