@@ -4,6 +4,10 @@
 #define PAGE_UNUSED	  0
 
 
+#define LAST_TICK_ACS (1 << 31)
+#define TOUCHED(var) (var >> 1 | LAST_TICK_ACS)
+#define UNTOUCHED(var) (var >> 1)
+
 // Per-CPU state
 struct cpu {
   uchar id;                    // Local APIC ID; index into cpus[] below
@@ -68,7 +72,7 @@ typedef void (*sighandler_t)(void);
 struct pageInfo {
 	uint pdx;
 	uint ptx;
-	
+	uint aCounter;  //only for nfu
 	int isUsed;
 	
 	uint address; // virtual address = a
@@ -95,6 +99,9 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  
+  int pageFaultCount;
+  int totalPagedOutCount;
   
   int pagesInFileCount;				// Number of pages in file
   int pagesInMemCount;				// Number of pages in memory
@@ -132,3 +139,5 @@ int getPageToRemove(void);
 void initMetaData(struct proc *);
 
 void swapPages(uint a);
+void updateNFUData(struct proc *);
+void updateAll(void);

@@ -51,6 +51,10 @@ trap(struct trapframe *tf)
     if(cpu->id == 0){
       acquire(&tickslock);
       ticks++;
+      #ifdef NFU
+      if (ticks % 100 == 0)
+		updateAll();
+      #endif
       wakeup(&ticks);
       release(&tickslock);
     }
@@ -78,10 +82,11 @@ trap(struct trapframe *tf)
     lapiceoi();
     break;
   case T_PGFLT:
-    cprintf("\n %d", rcr2());
+ //   cprintf("\n %d", rcr2());
+	#ifdef NONE
+	break;
+	#endif
 	swapPages(rcr2());
-	
-	
 	break;
   //PAGEBREAK: 13
   default:

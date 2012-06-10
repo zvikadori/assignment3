@@ -87,6 +87,8 @@ exec(char *path, char **argv)
   //page file info zerosizing:
   proc->pagesInMemCount = 0;
   proc->pagesInFileCount = 0;
+  proc->pageFaultCount = 0;
+  proc->totalPagedOutCount = 0;
   for (i = 0; i< MAX_PSYC_PAGES; i++)
 	proc->pagesInMemory	[i].isUsed = PAGE_UNUSED;
 

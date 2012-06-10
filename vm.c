@@ -7,6 +7,13 @@
 #include "proc.h"
 #include "elf.h"
 #include "fcntl.h"
+//#define NONE 0
+//#define FIFO 1
+//#define NFU  2
+
+
+
+
 
 void swapToDisk(void);
 void insertPageToMem(uint va, char *mem);
@@ -227,15 +234,16 @@ allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
 {
   char *mem;
   uint a;
-  
+  #ifndef NONE
   int removedIndex;
-
+  #endif
   if(newsz >= KERNBASE)
     return 0;
   if(newsz < oldsz)
     return oldsz;
 
   a = PGROUNDUP(oldsz);
+  
   for(; a < newsz; a += PGSIZE){
     mem = kalloc();
     if(mem == 0){
@@ -243,7 +251,7 @@ allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
       deallocuvm(pgdir, newsz, oldsz);
       return 0;
     }
-    
+    #ifndef NONE
     if (proc->pagesInMemCount < 15){
 		insertPageToMem(a, mem);
 	} else{
@@ -254,10 +262,11 @@ allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
 		proc->pagesInMemory[removedIndex].address = a;
 		proc->pagesInMemory[removedIndex].kaddress = mem;
 		proc->pagesInMemory[removedIndex].isUsed = PAGE_USED;
+		proc->pagesInMemory[removedIndex].aCounter = 0;
 		insertToMetaData(removedIndex);
 		proc->pagesInFileCount++;
 	}
-    
+    #endif
     memset(mem, 0, PGSIZE);
     mappages(pgdir, (char*)a, PGSIZE, v2p(mem), PTE_W|PTE_U);
   }
@@ -341,8 +350,9 @@ copyuvm(pde_t *pgdir, uint sz)
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walkpgdir(pgdir, (void *) i, 0)) == 0)
       panic("copyuvm: pte should exist");
-    if(!(*pte & PTE_P))
-      panic("copyuvm: page not present");
+    if(!(*pte & PTE_P)){
+   //   panic("copyuvm: page not present");
+	}
     pa = PTE_ADDR(*pte);
     if((mem = kalloc()) == 0)
       goto bad;
@@ -399,11 +409,15 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
 }
 
 void insertPageToMem(uint va, char *mem){
+	#ifdef NONE
+		return;
+	#endif
 	int pageNum = proc->pagesInMemCount;
 	//enter information to array
 	proc->pagesInMemory[pageNum].address = va;
 	proc->pagesInMemory[pageNum].kaddress = mem;
 	proc->pagesInMemory[pageNum].isUsed = PAGE_USED;
+	proc->pagesInMemory[pageNum].aCounter = 0;
 	//insert info to meta data
 	insertToMetaData(pageNum);
 	//increase num of pages in memory
@@ -413,6 +427,9 @@ void insertPageToMem(uint va, char *mem){
 
 void swapToDisk(){
 	int removedIndex = removeFromMetaData();
+	#ifdef NONE
+		return;
+	#endif
 	int i;
 	pte_t *pte;
 	//find the first place that is not used in page file:
@@ -427,6 +444,7 @@ void swapToDisk(){
 	//write to file 
 	lseekPage(proc->pageFile, i);
 	write(proc->pageFile, proc->pagesInMemory[removedIndex].kaddress, PGSIZE);
+	proc->totalPagedOutCount++;
 	//inform that page is paged to disk and no longer exists in main mem:
 	pte = walkpgdir(proc->pgdir, (void *)proc->pagesInMemory[removedIndex].address, 0);
 	if (!pte){
@@ -443,7 +461,10 @@ void swapToDisk(){
 	//move addresses to the disks pageInfo
 	proc->pagesInPageFile[i].isUsed = PAGE_USED;
 	proc->pagesInPageFile[i].address = proc->pagesInMemory[removedIndex].address;
-	proc->pagesInPageFile[i].kaddress = proc->pagesInPageFile[removedIndex].kaddress;
+	proc->pagesInPageFile[i].kaddress = proc->pagesInMemory[removedIndex].kaddress; //was ... = pagesInPageFile[i].kaddress
+	proc->pagesInPageFile[i].aCounter = proc->pagesInMemory[i].aCounter;
+	
+	
 	
 }
 
@@ -453,7 +474,9 @@ void swapFromDisk(uint a, int removedIndex){
 	uint va;
 	char *mem;
 	pte_t *pte;
-	
+	#ifdef NONE
+		return;
+	#endif
 	
 	va = PGROUNDDOWN(a);
 	
@@ -479,6 +502,7 @@ void swapFromDisk(uint a, int removedIndex){
 	proc->pagesInMemory[removedIndex].address = va;
 	proc->pagesInMemory[removedIndex].kaddress = mem;
 	proc->pagesInMemory[removedIndex].isUsed = PAGE_USED;
+	proc->pagesInMemory[removedIndex].aCounter = proc->pagesInPageFile[i].aCounter;
 	insertToMetaData(removedIndex);
 	//handle pte
 	pte = walkpgdir(proc->pgdir, (void *) va, 0);
@@ -491,9 +515,45 @@ void swapFromDisk(uint a, int removedIndex){
 }
 
 void swapPages(uint a){
+	#ifdef NONE
+		return;
+	#endif
+//	cprintf("swappp\n");
 	int removedIndex = getPageToRemove();
 	swapToDisk();
-	
 	swapFromDisk(a, removedIndex);
-	
+	proc->pageFaultCount++;
 }
+
+
+void updateNFUData(struct proc *p){
+	int i;
+	struct pageInfo page;
+	pte_t *pte;
+	
+	
+	
+	
+	for (i = 0; i< MAX_PSYC_PAGES; i++){
+		
+		page = p->pagesInMemory[i]; //can't talk about first proc...
+		//cprintf("%d", page.aCounter);
+		if (page.isUsed == PAGE_USED){
+			pte = walkpgdir(p->pgdir, (char *)page.address, 0);
+			if (*pte & PTE_A)
+				page.aCounter = TOUCHED(page.aCounter);
+			else
+				page.aCounter = UNTOUCHED(page.aCounter);
+		}
+	}
+	
+	//we did not touch any page in secondary mem
+	for (i = 0; i< MAX_PAGES_IN_FILE(); i++){
+		page = p->pagesInPageFile[i];
+		if (page.isUsed == PAGE_USED){
+			page.aCounter = UNTOUCHED(page.aCounter);
+		}
+	}
+}
+	
+	

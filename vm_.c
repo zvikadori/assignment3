@@ -473,6 +473,7 @@ int swapIn(){
 
 //pfAddress = page fault address(should be rounded!)
 int swapPages(uint pfAddress){
+	#ifndef NONE
 	int removeFromMemCell = swapIn();
 	pte_t *pte;
 	char * mem;
@@ -518,7 +519,7 @@ int swapPages(uint pfAddress){
 	insertToMetaData(removeFromMemCell);
 	
 //	proc->pagesInFileCount++;
-	
+	#endif
 	return 1;
 	
 }

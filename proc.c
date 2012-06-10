@@ -11,8 +11,6 @@
 #include "file.h"
 #include "fcntl.h"
 
-
-
 char * createPageFileName(struct proc *p){
 	int tens = p->pid / 10;
 	int units =  p->pid % 10;
@@ -63,6 +61,7 @@ pinit(void)
 static struct proc*
 allocproc(void)
 {
+  
   struct proc *p;
   char *sp;
 
@@ -98,11 +97,16 @@ found:
   p->context = (struct context*)sp;
   memset(p->context, 0, sizeof *p->context);
   p->context->eip = (uint)forkret;
+  #ifndef NONE
+	p->pageFaultCount = 0;
+	p->totalPagedOutCount = 0;
+	p->pagesInFileCount = 0;
+	p->pagesInMemCount = 0;
+	p->pageFile = -1;
+	
+  #endif
+	return p;
   
-  p->pagesInFileCount = 0;
-  p->pagesInMemCount = 0;
-  p->pageFile = -1;
-  return p;
 }
 
 //PAGEBREAK: 32
@@ -182,7 +186,7 @@ fork(void)
   // Clear %eax so that fork returns 0 in the child.
   np->tf->eax = 0;
   
-  
+  #ifndef NONE
   /* 1.1, hard copy of information */
   if (np->pageFile == -1)
 		np->pageFile = open(createPageFileName(np), O_CREATE | O_RDWR);
@@ -194,11 +198,12 @@ fork(void)
 	  
   // call copy of files:
   copyPageFile(proc->pageFile, np->pageFile);
-  
   close(np->pageFile);		//proc does not need that page file, its his child's
   
   np->pagesInFileCount = proc->pagesInFileCount;
   np->pagesInMemCount = proc->pagesInFileCount;
+  np->totalPagedOutCount = proc->totalPagedOutCount;
+  np->pageFaultCount = proc->pageFaultCount;
   
   //deep copy father's page file to new page file
   //copies addresses from father to child
@@ -210,6 +215,11 @@ fork(void)
   np->pagesInPageFile[i] = proc->pagesInPageFile[i];
   }
   
+  #else 
+  for(i = 0; i < NOFILE; i++)
+    if(proc->ofile[i])
+		np->ofile[i] = filedup(proc->ofile[i]);
+  #endif
   
   /* 1.1 end hard copy */
   
@@ -521,6 +531,7 @@ procdump(void)
   struct proc *p;
   char *state;
   uint pc[10];
+  int numOfPagesInMem = 0;
   
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
     if(p->state == UNUSED)
@@ -530,14 +541,18 @@ procdump(void)
     else
       state = "???";
     cprintf("%d %s %s", p->pid, state, p->name);
+    cprintf(" %d %d %d %d",p->pagesInMemCount, p->pagesInFileCount,p->pageFaultCount, p->totalPagedOutCount);
+    
     if(p->state == SLEEPING){
       getcallerpcs((uint*)p->context->ebp+2, pc);
       for(i=0; i<10 && pc[i] != 0; i++)
         cprintf(" %p", pc[i]);
     }
-    cprintf(" %d", p->pagesInFileCount + p->pagesInMemCount);
+    numOfPagesInMem += p->pagesInMemCount;
     cprintf("\n");
   }
+  cprintf("%d% free pages in the system\n", 100 * ((MAX_PSYC_PAGES * NPROC) - numOfPagesInMem)/(MAX_PSYC_PAGES * NPROC));
+
 } 
 
 
@@ -720,20 +735,44 @@ copyPageFile(int fatherFD, int childFD){
 }
 
 void insertToMetaData(int pagesInMemCellNum){
-	
+	#ifdef NFU
+	return;
+	#endif
 	//if it is FIFO:
 	proc->metaDataFIFO.pages[proc->metaDataFIFO.counter] = pagesInMemCellNum;
 	proc->metaDataFIFO.counter++;
+
 	
 	
 }
 
 int getPageToRemove(){
+	#ifdef FIFO
 	return proc->metaDataFIFO.pages[0];
+	#endif
+	
+	#ifdef NFU
+	int i;
+	uint min = -1; //max UINT
+	int minIndex = -1;
+	for (i = 0; i < MAX_PAGES_IN_FILE(); i++){
+		if (proc->pagesInMemory[i].aCounter < min && proc->pagesInMemory[i].isUsed == PAGE_USED){
+			min = proc->pagesInMemory[i].aCounter;
+			minIndex = i;
+		}
+	} 
+	// no removing!!
+	return minIndex;
+	#endif
+	
+	#ifdef NONE
+	return 0;
+	#endif
 }
 
 
 int removeFromMetaData(){
+	#ifdef FIFO
 	int ans = proc->metaDataFIFO.pages[0];
 	int i;
 	
@@ -743,7 +782,15 @@ int removeFromMetaData(){
 	
 	proc->metaDataFIFO.counter--;
 	return ans;
+	#endif
 	
+	#ifdef NFU
+	return getPageToRemove();
+	#endif
+	
+	#ifdef NONE
+	return 0;
+	#endif
 }
 
 void initMetaData(struct proc *p){
@@ -751,5 +798,22 @@ void initMetaData(struct proc *p){
 	p->metaDataFIFO.counter = 0;
 	for (; i< MAX_PAGES_IN_FILE(); i++)
 		p->metaDataFIFO.pages[i] = 0;
+	for (i = 0; i< MAX_PSYC_PAGES; i++)
+		p->pagesInMemory[i].aCounter = 0;
+	for (i = 0; i< MAX_PAGES_IN_FILE(); i++)
+		p->pagesInPageFile[i].aCounter = 0;
+	
+}
+
+void updateAll(void){
+	struct proc *p;
+	acquire(&ptable.lock);
+	for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+		if (p->pid == 1 || p->pid == 2 || p->state != RUNNABLE || p->state != RUNNING)
+			continue;
+		updateNFUData(p);
+	}
+			
+	release(&ptable.lock);
 	
 }

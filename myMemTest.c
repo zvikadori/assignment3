@@ -24,9 +24,11 @@ int main(void){
 		
 	for ( i=0; i < 4096 *18; i++)
 		printf(1, "%c", z[i]);
-		
+	fork();	
 		
 	bla();
+	
+	//
 //	for(i=0; i< 4096 * 18; i++)
 //		z[i] = 'b';
 		//	for (i= 4096 * 10; i < 4096 * 25; i++)
